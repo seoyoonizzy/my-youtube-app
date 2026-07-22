@@ -3,6 +3,7 @@ import requests
 import streamlit as st
 import plotly.graph_objects as go
 from collections import Counter
+from wordcloud import WordCloud
 
 # ------------------------------------------------------------
 # 기본 설정
@@ -11,6 +12,8 @@ st.set_page_config(page_title="유튜브 댓글 분석기", page_icon="💬", la
 
 DEFAULT_URL_1 = "https://www.youtube.com/watch?v=c51ND9Hdbw0"  # 토이스토리5 예고편(영어 댓글)
 DEFAULT_URL_2 = "https://youtu.be/I9vK5EVTt0U?si=NEZ8L7MRuNvrzINa"  # 2002 월드컵 추억(한국어 댓글)
+FONT_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
+FONT_PATH = "NanumGothic-Regular.ttf"
 
 # 세션 상태에 입력창 값을 저장해서, 버튼 클릭 시 입력창 내용을 바꿀 수 있게 함
 if "url_input" not in st.session_state:
@@ -107,27 +110,28 @@ def fetch_comments(video_id: str, api_key: str, max_results: int = 100):
     return comments, None
 
 
-def get_top_words(comments: list[dict], top_n: int = 20) -> list[tuple[str, int]]:
+def clean_words(comments: list[dict]) -> list[str]:
     """
-    댓글 전체 텍스트를 단어로 쪼개서 자주 나온 단어 상위 top_n개를 구하는 함수.
-    - 한글, 영어, 숫자를 단어로 인식 (정규식 \\w+ 사용, 유니코드 지원)
-    - 영어는 소문자로 통일해서 같은 단어로 취급 (Toy와 toy를 하나로 묶기 위함)
-    - 한 글자짜리 단어는 결과에서 제외
+    댓글 전체를 단어로 쪼개고, 한 글자 단어와 숫자만 있는 단어를 제외한
+    단어 리스트를 돌려주는 공용 함수 (2단계, 3단계 둘 다 여기서 씀).
     """
-    counter = Counter()
-
+    words = []
     for c in comments:
         text = c["댓글"]
         # \w+ : 한글/영문/숫자/밑줄을 단어로 인식 (유니코드 모드)
-        words = re.findall(r"\w+", text, flags=re.UNICODE)
-        for w in words:
+        for w in re.findall(r"\w+", text, flags=re.UNICODE):
             w = w.lower()  # 영어 대소문자 통일
             if len(w) <= 1:  # 한 글자짜리 단어는 제외
                 continue
-            if w.isdigit():  # 숫자만 있는 단어는 의미 없으니 제외
+            if w.isdigit():  # 숫자만 있는 단어는 제외
                 continue
-            counter[w] += 1
+            words.append(w)
+    return words
 
+
+def get_top_words(words: list[str], top_n: int = 20) -> list[tuple[str, int]]:
+    """단어 리스트에서 자주 나온 단어 상위 top_n개를 구하는 함수."""
+    counter = Counter(words)
     return counter.most_common(top_n)
 
 
@@ -136,8 +140,6 @@ def make_top_words_chart(top_words: list[tuple[str, int]]):
     상위 단어 목록을 Plotly 가로 막대그래프로 만드는 함수.
     많이 나온 단어가 위쪽에 오도록 정렬함.
     """
-    # most_common은 많이 나온 순으로 정렬되어 있음
-    # 가로 막대그래프에서 위에서부터 큰 값이 오게 하려면 리스트를 뒤집어서 전달해야 함
     words = [w for w, _ in top_words][::-1]
     counts = [n for _, n in top_words][::-1]
 
@@ -161,11 +163,45 @@ def make_top_words_chart(top_words: list[tuple[str, int]]):
     return fig
 
 
+@st.cache_resource(show_spinner=False)
+def download_font() -> str | None:
+    """
+    한글 폰트(나눔고딕)를 인터넷에서 내려받아 로컬 파일로 저장하는 함수.
+    캐시를 써서 앱이 재실행돼도 매번 다시 내려받지 않도록 함.
+    성공하면 파일 경로를, 실패하면 None을 돌려줌.
+    """
+    try:
+        response = requests.get(FONT_URL, timeout=15)
+        if response.status_code != 200:
+            return None
+        with open(FONT_PATH, "wb") as f:
+            f.write(response.content)
+        return FONT_PATH
+    except requests.exceptions.RequestException:
+        return None
+
+
+def make_wordcloud_image(words: list[str], font_path: str):
+    """
+    단어 리스트로 워드클라우드를 만들어 PIL 이미지 형태로 돌려주는 함수.
+    matplotlib을 쓰지 않고 wordcloud 자체 기능(to_image)만 사용함.
+    배경은 흰색으로 지정.
+    """
+    text = " ".join(words)
+    wc = WordCloud(
+        font_path=font_path,
+        background_color="white",
+        width=1000,
+        height=600,
+    ).generate(text)
+    return wc.to_image()
+
+
 # ------------------------------------------------------------
 # 화면 구성
 # ------------------------------------------------------------
-st.title("💬 유튜브 댓글 분석기 (2단계)")
-st.caption("유튜브 영상 링크를 넣으면 좋아요가 많은 댓글 순으로 최대 100개를 가져오고, 자주 나온 단어도 분석해요.")
+st.title("💬 유튜브 댓글 분석기 (3단계)")
+st.caption("유튜브 영상 링크를 넣으면 댓글을 가져오고, 자주 나온 단어와 워드클라우드까지 분석해요.")
 
 # 예시 버튼 두 개를 나란히 배치
 col1, col2 = st.columns(2)
@@ -205,15 +241,35 @@ if st.button("댓글 가져오기", type="primary"):
                 # 댓글 목록을 표로 표시
                 st.dataframe(comments_sorted, use_container_width=True)
 
+                # 2단계, 3단계에서 공통으로 쓸 단어 리스트 미리 만들어두기
+                words = clean_words(comments_sorted)
+
                 # ------------------------------------------------------------
                 # 2단계: 자주 나온 단어 TOP 20 분석
                 # ------------------------------------------------------------
                 st.subheader("📊 자주 나온 단어 TOP 20")
 
-                top_words = get_top_words(comments_sorted, top_n=20)
+                top_words = get_top_words(words, top_n=20)
 
                 if not top_words:
                     st.info("분석할 만한 단어가 충분하지 않아요.")
                 else:
                     fig = make_top_words_chart(top_words)
                     st.plotly_chart(fig, use_container_width=True)
+
+                # ------------------------------------------------------------
+                # 3단계: 워드클라우드
+                # ------------------------------------------------------------
+                st.subheader("☁️ 댓글 워드클라우드")
+
+                if not words:
+                    st.info("워드클라우드를 그릴 만한 단어가 충분하지 않아요.")
+                else:
+                    with st.spinner("한글 폰트를 준비하는 중이에요..."):
+                        font_path = download_font()
+
+                    if not font_path:
+                        st.warning("🙏 한글 폰트를 내려받지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.")
+                    else:
+                        wc_image = make_wordcloud_image(words, font_path)
+                        st.image(wc_image, use_container_width=True)
