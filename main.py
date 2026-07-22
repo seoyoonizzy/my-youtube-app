@@ -1,6 +1,8 @@
 import re
 import requests
 import streamlit as st
+import plotly.graph_objects as go
+from collections import Counter
 
 # ------------------------------------------------------------
 # 기본 설정
@@ -105,11 +107,65 @@ def fetch_comments(video_id: str, api_key: str, max_results: int = 100):
     return comments, None
 
 
+def get_top_words(comments: list[dict], top_n: int = 20) -> list[tuple[str, int]]:
+    """
+    댓글 전체 텍스트를 단어로 쪼개서 자주 나온 단어 상위 top_n개를 구하는 함수.
+    - 한글, 영어, 숫자를 단어로 인식 (정규식 \\w+ 사용, 유니코드 지원)
+    - 영어는 소문자로 통일해서 같은 단어로 취급 (Toy와 toy를 하나로 묶기 위함)
+    - 한 글자짜리 단어는 결과에서 제외
+    """
+    counter = Counter()
+
+    for c in comments:
+        text = c["댓글"]
+        # \w+ : 한글/영문/숫자/밑줄을 단어로 인식 (유니코드 모드)
+        words = re.findall(r"\w+", text, flags=re.UNICODE)
+        for w in words:
+            w = w.lower()  # 영어 대소문자 통일
+            if len(w) <= 1:  # 한 글자짜리 단어는 제외
+                continue
+            if w.isdigit():  # 숫자만 있는 단어는 의미 없으니 제외
+                continue
+            counter[w] += 1
+
+    return counter.most_common(top_n)
+
+
+def make_top_words_chart(top_words: list[tuple[str, int]]):
+    """
+    상위 단어 목록을 Plotly 가로 막대그래프로 만드는 함수.
+    많이 나온 단어가 위쪽에 오도록 정렬함.
+    """
+    # most_common은 많이 나온 순으로 정렬되어 있음
+    # 가로 막대그래프에서 위에서부터 큰 값이 오게 하려면 리스트를 뒤집어서 전달해야 함
+    words = [w for w, _ in top_words][::-1]
+    counts = [n for _, n in top_words][::-1]
+
+    fig = go.Figure(
+        go.Bar(
+            x=counts,
+            y=words,
+            orientation="h",
+            marker_color="#FF4B4B",
+            text=counts,
+            textposition="outside",
+        )
+    )
+    fig.update_layout(
+        title="자주 나온 단어 TOP 20",
+        xaxis_title="언급 횟수",
+        yaxis_title="단어",
+        height=600,
+        margin=dict(l=100, r=40, t=60, b=40),
+    )
+    return fig
+
+
 # ------------------------------------------------------------
 # 화면 구성
 # ------------------------------------------------------------
-st.title("💬 유튜브 댓글 분석기 (1단계)")
-st.caption("유튜브 영상 링크를 넣으면 좋아요가 많은 댓글 순으로 최대 100개를 가져와요.")
+st.title("💬 유튜브 댓글 분석기 (2단계)")
+st.caption("유튜브 영상 링크를 넣으면 좋아요가 많은 댓글 순으로 최대 100개를 가져오고, 자주 나온 단어도 분석해요.")
 
 # 예시 버튼 두 개를 나란히 배치
 col1, col2 = st.columns(2)
@@ -148,3 +204,16 @@ if st.button("댓글 가져오기", type="primary"):
 
                 # 댓글 목록을 표로 표시
                 st.dataframe(comments_sorted, use_container_width=True)
+
+                # ------------------------------------------------------------
+                # 2단계: 자주 나온 단어 TOP 20 분석
+                # ------------------------------------------------------------
+                st.subheader("📊 자주 나온 단어 TOP 20")
+
+                top_words = get_top_words(comments_sorted, top_n=20)
+
+                if not top_words:
+                    st.info("분석할 만한 단어가 충분하지 않아요.")
+                else:
+                    fig = make_top_words_chart(top_words)
+                    st.plotly_chart(fig, use_container_width=True)
